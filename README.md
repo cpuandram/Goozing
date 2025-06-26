@@ -42,7 +42,7 @@
 ## Usage Example
 
 <img src="https://github.com/user-attachments/assets/15309cff-d2c3-4387-af35-cdfbb09f396c"
-     width="50%"
+     width="35%"
      align="right"
      alt="demo">
 
