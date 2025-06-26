@@ -89,7 +89,7 @@ int main(void) {
 }
 ```
 
-This example produces a small grid of cubes with oozing extrusions between perimeter and infill.
+This example generates the gcode to print the image above oozing between the cubes.
 
 ## Alpha Status & Roadmap
 
