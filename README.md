@@ -4,11 +4,6 @@
 
 > **Warning:** This is a very early alpha release. The API and output may change in future versions. Use at your own risk and always verify generated G-code in a 3D printer simulator before printing.
 
-<img src="https://github.com/user-attachments/assets/15309cff-d2c3-4387-af35-cdfbb09f396c"
-     width="200"
-     align="right"
-     alt="demo">
-
 ---
 
 ## Features
@@ -45,6 +40,11 @@
    ```
 
 ## Usage Example
+
+<img src="https://github.com/user-attachments/assets/15309cff-d2c3-4387-af35-cdfbb09f396c"
+     width="50%"
+     align="right"
+     alt="demo">
 
 ```c
 #define GOOZ_IMPLEMENTATION
