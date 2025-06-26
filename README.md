@@ -42,7 +42,7 @@
 ## Usage Example
 
 ```c
-#include <math.h>
+#define GOOZ_IMPLEMENTATION
 #include "gooz.h"
 
 int main(void) {
@@ -64,14 +64,14 @@ int main(void) {
     };
     gooz_set_print_settings(&settings);
 
-    // 2. Add a grid of small cubes centered at (80,80)
-    const int grid = 3;
-    for (int i = 0; i <= grid; ++i) {
-        for (int j = 0; j <= grid; ++j) {
-            double x = (i - grid/2.0) * 20 + 80;
-            double y = (j - grid/2.0) * 20 + 80;
-            gooz_add_cube(x, y, 6.0);
-        }
+    // 2. Add a circle of small cubes centered at (80,80)
+    const float cx = 80.0f, cy = 80.0f, r = 50.0f;
+    const int nbr_cubes=36;
+    for(int i = 0; i < nbr_cubes; ++i) {
+        float theta = 2.0f * M_PI * i / nbr_cubes;    // divide circle into 10 segments
+        float x = cx + r * cos(theta);
+        float y = cy + r * sin(theta);
+        gooz_add_cube(x, y, 1.5f);
     }
 
     // 3. Generate the G-code file
