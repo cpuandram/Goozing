@@ -18,7 +18,7 @@ int main(void) {
         .build_depth       = 220,
         .build_height      = 250
     };
-    int a=rand();
+
     gooz_set_print_settings(&settings);
     for (double i=10; i<220; i+=22.0){
       for (double j=10; j<220; j+=22.0){
