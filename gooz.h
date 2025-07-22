@@ -8,19 +8,13 @@
 
 // Public API
 
-typedef enum { FORM_CUBE, FORM_CYLINDER } GoozFormType;
-
-int gooz_add_cube(double x, double y, double size);
-int gooz_add_cylinder(double x, double y, double radius, double height);
-void gooz_free();
-
 // Printer/material and build plate settings
 typedef struct {
   double nozzle_diameter;   // e.g. 0.4
   double filament_diameter; // e.g. 1.75
   double layer_height;      // e.g. 0.2
-  double print_speed;       // mm/min
-  double travel_speed;      // mm/min
+  int print_speed;       // mm/min
+  int travel_speed;      // mm/min
   double print_width_ratio;
   double oozing_ratio;
   double oozing_z_security;
@@ -34,12 +28,21 @@ typedef struct {
 // Set up your material/printer parameters before generating G-code.
 void gooz_set_print_settings(const GoozPrintSettings *settings);
 
-// Generate a single-extruder G-code file for Ender 3 V2.
+int gooz_add_cube(double x, double y, double size);
+int gooz_add_cylinder(double x, double y, double radius, double height);
+
+// Generate the G-code file.
 void gooz_generate_gcode(FILE *out);
+void gooz_free();
 
 #ifdef GOOZ_IMPLEMENTATION
 
+// Constants
+static const double GOOZ_TINY_VALUE = 5e-4;
+
 // Internal Structures
+typedef enum { FORM_CUBE, FORM_CYLINDER } GoozFormType;
+
 typedef struct {
   double x, y;
   GoozFormType type;
@@ -171,27 +174,27 @@ static void set_nozzle(double x, double y, double z, double e) {
 }
 
 static void add_move(FILE *out, double x, double y, double z) {
-  set_nozzle(x, y, z, nozzle_state.e);
-  if (z == nozzle_state.z) {
-    fprintf(out, "G1 X%.2f Y%.2f F%.2f ; Move head in XY plane\n", x, y,
+  if (z > nozzle_state.z + GOOZ_TINY_VALUE) {
+    fprintf(out, "G1 Z%.2f F%d ; Move head up\n", z,
             print_settings.travel_speed);
-  } else if (z > nozzle_state.z) {
-    fprintf(out, "G1 Z%.2f F%.2f ; Move head up\n", z,
+    fprintf(out, "G1 X%.2f Y%.2f F%d ; Move head in XY plane\n", x, y,
             print_settings.travel_speed);
-    fprintf(out, "G1 X%.2f Y%.2f F%.2f ; Move head in XY plane\n", x, y,
+  } else if (z < nozzle_state.z - GOOZ_TINY_VALUE) {
+    fprintf(out, "G1 X%.2f Y%.2f F%d ; Move head in XY plane\n", x, y,
+            print_settings.travel_speed);
+    fprintf(out, "G1 Z%.2f F%d ; Move head down\n", z,
             print_settings.travel_speed);
   } else {
-    fprintf(out, "G1 X%.2f Y%.2f F%.2f ; Move head in XY plane\n", x, y,
-            print_settings.travel_speed);
-    fprintf(out, "G1 Z%.2f F%.2f ; Move head down\n", z,
+    fprintf(out, "G1 X%.2f Y%.2f F%d ; Move head in XY plane\n", x, y,
             print_settings.travel_speed);
   }
+  set_nozzle(x, y, z, nozzle_state.e);
 }
 
 static void add_move_oozing(FILE *out, double x, double y, double z) {
   fprintf(out, "; add_line_oozing\n");
 
-  double area = print_settings.nozzle_diameter * 0.2;
+  double area = print_settings.nozzle_diameter * print_settings.layer_height * print_settings.print_width_ratio;
   double dx = fabs(x - nozzle_state.x);
   double dy = fabs(y - nozzle_state.y);
   double dz = fabs(z - nozzle_state.z);
@@ -199,14 +202,17 @@ static void add_move_oozing(FILE *out, double x, double y, double z) {
   double e = extrusion_length(area, dist * print_settings.oozing_ratio);
 
   fprintf(out, "G92 E0 ; Reset extrusion head\n");
-  fprintf(out, "G1 Z%.2f E%.2f F%.2f ; Add oozing up\n",
+  fprintf(out, "G1 Z%.2f E%.2f F%d ; Add oozing up\n",
           z + print_settings.oozing_z_security,
           e * (dz + print_settings.oozing_z_security) /
               (dx + dy + dz + print_settings.oozing_z_security),
           print_settings.travel_speed);
-  fprintf(out, "G1 X%.2f Y%.2f E%.2f F%.2f ; Add oozing in XY plane\n\n", x, y,
+  fprintf(out, "G1 X%.2f Y%.2f E%.2f F%d ; Add oozing in XY plane\n",
+	  (nozzle_state.x+x)/2, (nozzle_state.y+y)/2,
           e, print_settings.travel_speed);
-  fprintf(out, "G1 Z%.2f F%.2f ; Remove oozing security\n", z,
+  fprintf(out, "G1 X%.2f Y%.2f F%d ; Add oozing in XY plane\n\n", x, y,
+          print_settings.travel_speed);
+  fprintf(out, "G1 Z%.2f F%d ; Remove oozing security\n", z,
           print_settings.travel_speed);
   set_nozzle(x, y, z, e);
 }
@@ -220,7 +226,7 @@ static void add_line(FILE *out, double x, double y, double z, double width) {
   double dist = sqrt(dx * dx + dy * dy + dz * dz);
   double e = extrusion_length(area, dist);
 
-  fprintf(out, "G1 X%.2f Y%.2f Z%.2f E%.2f F%.2f ; Add line\n", x, y, z,
+  fprintf(out, "G1 X%.2f Y%.2f Z%.2f E%.2f F%d ; Add line\n", x, y, z,
           nozzle_state.e + e, print_settings.print_speed);
 
   set_nozzle(x, y, z, nozzle_state.e + e);
@@ -251,13 +257,15 @@ static void emit_shutdown(FILE *out) {
   fprintf(out, "M84 ; Disable motors\n");
 }
 
-static int closest_coord_idx(double (*coords)[2], int nbr_coords) {
+static int closest_coord_idx(const double (*coords)[2], int nbr_coords) {
   int min_idx = 0;
-  double min_dist = fabs(coords[min_idx][0] - nozzle_state.x) +
-                    fabs(coords[min_idx][1] - nozzle_state.y);
+  double dx=coords[min_idx][0] - nozzle_state.x;
+  double dy=coords[min_idx][1] - nozzle_state.y;
+  double min_dist = dx*dx+dy*dy;
   for (int i = 1; i < nbr_coords; ++i) {
-    double cur_dist = fabs(coords[i][0] - nozzle_state.x) +
-                      fabs(coords[i][1] - nozzle_state.y);
+    dx=coords[i][0] - nozzle_state.x;
+    dy=coords[i][1] - nozzle_state.y;
+    double cur_dist = dx*dx+dy*dy;
     if (min_dist > cur_dist) {
       min_idx = i;
       min_dist = cur_dist;
@@ -276,13 +284,86 @@ static void add_cube_perimeter(FILE *out, GoozForm *f) {
   double coords[4][2] = {
       {x - s, y - s}, {x - s, y + s}, {x + s, y + s}, {x + s, y - s}};
   int min_idx = closest_coord_idx(coords, 4);
-  add_move_oozing(out, coords[min_idx][0], coords[min_idx][1], z);
+  add_move(out, coords[min_idx][0], coords[min_idx][1], z);
 
   fprintf(out, "; cube perimeter layer %zu\n", f->state.cur_layer);
 
   for (int i = 1; i <= 4; i++) {
     add_line(out, coords[(min_idx + i) % 4][0], coords[(min_idx + i) % 4][1], z,
              print_settings.nozzle_diameter);
+  }
+}
+
+
+static void add_cube_infill_spiral(FILE *out, GoozForm *f) {
+  double z = f->state.cur_layer * f->state.height_layer;
+  double x = f->x, y = f->y,
+         s = f->shape.cube.side - 2 * print_settings.nozzle_diameter;
+  size_t nbr_pass = compute_nbr_pass(s, print_settings.nozzle_diameter);
+  double width = s / nbr_pass;
+  s = (s - width) / 2;
+  if (nbr_pass & 1) {
+    if (f->state.cur_layer & 1){
+      double k=1;
+      for (int i = 1; i < nbr_pass; ++i) {
+	add_line(out, nozzle_state.x+width*(i)*k, nozzle_state.y, z, width);
+	add_line(out, nozzle_state.x, nozzle_state.y+width*(i)*k, z, width);
+	k*=-1;
+      }
+      add_line(out, nozzle_state.x+width*(nbr_pass-1)*k, nozzle_state.y, z, width);
+    }
+    else{
+       double k=-1;
+       for (int i = 1; i < nbr_pass; ++i) {
+	 add_line(out, nozzle_state.x+width*(i)*k, nozzle_state.y, z, width);
+	 add_line(out, nozzle_state.x, nozzle_state.y+width*(i)*k, z, width);
+	 k*=-1;
+       }
+       add_line(out, nozzle_state.x+width*(nbr_pass-1)*k, nozzle_state.y, z, width);
+    }
+  }
+  else {
+    double coords[4][2] = {
+      {x - width/2, y - width/2}, {x - width/2, y + width/2}, {x + width/2, y + width/2}, {x + width/2, y - width/2}};
+    int min_idx = closest_coord_idx(coords, 4);
+    add_move(out, coords[min_idx][0], coords[min_idx][1], z);
+    double k=1;
+    switch (min_idx) {
+    case 0:
+      for (int i = 1; i < nbr_pass; ++i) {
+	add_line(out, nozzle_state.x, nozzle_state.y + width*i*k, z, width);
+	add_line(out, nozzle_state.x + width*i*k, nozzle_state.y, z, width);
+	k*=-1;
+      }
+      add_line(out, nozzle_state.x, nozzle_state.y + width*(nbr_pass-1)*k, z, width);
+      break;
+    case 1:
+      for (int i = 1; i < nbr_pass; ++i) {
+	add_line(out, nozzle_state.x, nozzle_state.y - width*i*k, z, width);
+	add_line(out, nozzle_state.x + width*i*k, nozzle_state.y, z, width);
+	k*=-1;
+      }
+      add_line(out, nozzle_state.x, nozzle_state.y - width*(nbr_pass-1)*k, z, width);
+      break;
+    case 2:
+      for (int i = 1; i < nbr_pass; ++i) {
+	add_line(out, nozzle_state.x, nozzle_state.y - width*i*k, z, width);
+	add_line(out, nozzle_state.x - width*i*k, nozzle_state.y, z, width);
+	k*=-1;
+      }
+      add_line(out, nozzle_state.x, nozzle_state.y - width*(nbr_pass-1)*k, z, width);
+      break;
+    case 3:
+      for (int i = 1; i < nbr_pass; ++i) {
+	add_line(out, nozzle_state.x, nozzle_state.y + width*i*k, z, width);
+	add_line(out, nozzle_state.x - width*i*k, nozzle_state.y, z, width);
+	k*=-1;
+      }
+      add_line(out, nozzle_state.x, nozzle_state.y + width*(nbr_pass-1)*k, z, width);
+      break;
+    default:
+      break;
+    }
   }
 }
 
@@ -351,14 +432,14 @@ static void add_cylinder_perimeter(FILE *out, GoozForm *f) {
   double area = print_settings.nozzle_diameter * print_settings.layer_height;
   double x = f->x, y = f->y, r = f->shape.cylinder.radius;
   double sx = x + r, sy = y;
-  fprintf(out, "G1 X%.2f Y%.2f Z%.2f F%.0f ; cyl layer %zu\n", sx, sy, z,
+  fprintf(out, "G1 X%.2f Y%.2f Z%.2f F%d ; cyl layer %zu\n", sx, sy, z,
           print_settings.travel_speed, f->state.cur_layer);
   for (int i = 1; i <= seg; i++) {
     double ang = i * step;
     double nx = x + r * cos(ang), ny = y + r * sin(ang);
     double dist = sqrt((nx - sx) * (nx - sx) + (ny - sy) * (ny - sy));
     double e = extrusion_length(area, dist);
-    fprintf(out, "G1 X%.2f Y%.2f E%.5f F%.0f\n", nx, ny, e,
+    fprintf(out, "G1 X%.2f Y%.2f E%.5f F%d\n", nx, ny, e,
             print_settings.print_speed);
     sx = nx;
     sy = ny;
@@ -372,8 +453,8 @@ void gooz_set_print_settings(const GoozPrintSettings *s) {
 
 size_t *range(size_t min, size_t max) {
   size_t *range = malloc(sizeof(size_t) * (max - min));
-  for (size_t i = min; i < max; ++i) {
-    range[i] = i;
+  for (size_t i = 0; i < max-min; ++i) {
+    range[i] = i+min;
   }
   return range;
 }
@@ -411,13 +492,14 @@ void gooz_generate_gcode(FILE *out) {
         active_idxs[i] = active_idxs[--nbr_active_forms];
         continue;
       }
-
+      double z = cur_form->state.cur_layer * cur_form->state.height_layer;
+      if (l==1 && i==nbr_active_forms - 1) add_move(out, cur_form->x, cur_form->y, z);
+      else add_move_oozing(out, cur_form->x, cur_form->y, z);
       switch (cur_form->type) {
-
+	
       case FORM_CUBE:
+        add_cube_infill_spiral(out, cur_form);
         add_cube_perimeter(out, cur_form);
-        add_cube_infill(out, cur_form);
-
         break;
 
       case FORM_CYLINDER:
@@ -427,6 +509,7 @@ void gooz_generate_gcode(FILE *out) {
       default:
         break;
       }
+      add_move(out, cur_form->x, cur_form->y, z);
     }
   }
   emit_shutdown(out);
