@@ -39,7 +39,7 @@ void gooz_free();
 
 // Constants
 static const double GOOZ_TINY_VALUE = 5e-4;
-
+static const double GOOZ_OFFSET_Z = 0.1;
 // Internal Structures
 typedef enum { FORM_CUBE, FORM_CYLINDER } GoozFormType;
 
@@ -275,7 +275,7 @@ static int closest_coord_idx(const double (*coords)[2], int nbr_coords) {
 }
 
 static void add_cube_perimeter(FILE *out, GoozForm *f) {
-  double z = f->state.cur_layer * f->state.height_layer;
+  double z = f->state.cur_layer * f->state.height_layer-GOOZ_OFFSET_Z;
   double area = print_settings.nozzle_diameter * print_settings.layer_height;
   double x = f->x, y = f->y,
          s = f->shape.cube.side / 2 -
@@ -284,7 +284,7 @@ static void add_cube_perimeter(FILE *out, GoozForm *f) {
   double coords[4][2] = {
       {x - s, y - s}, {x - s, y + s}, {x + s, y + s}, {x + s, y - s}};
   int min_idx = closest_coord_idx(coords, 4);
-  add_move(out, coords[min_idx][0], coords[min_idx][1], z);
+  add_move_oozing(out, coords[min_idx][0], coords[min_idx][1], z);
 
   fprintf(out, "; cube perimeter layer %zu\n", f->state.cur_layer);
 
@@ -295,8 +295,8 @@ static void add_cube_perimeter(FILE *out, GoozForm *f) {
 }
 
 
-static void add_cube_infill_spiral(FILE *out, GoozForm *f) {
-  double z = f->state.cur_layer * f->state.height_layer;
+static void add_cube_infill_spiral_outward(FILE *out, GoozForm *f) {
+  double z = f->state.cur_layer * f->state.height_layer-GOOZ_OFFSET_Z;
   double x = f->x, y = f->y,
          s = f->shape.cube.side - 2 * print_settings.nozzle_diameter;
   size_t nbr_pass = compute_nbr_pass(s, print_settings.nozzle_diameter);
@@ -367,8 +367,58 @@ static void add_cube_infill_spiral(FILE *out, GoozForm *f) {
   }
 }
 
+static void add_cube_infill_spiral_inward(FILE *out, GoozForm *f) {
+  double z = f->state.cur_layer * f->state.height_layer-GOOZ_OFFSET_Z;
+  double x = f->x, y = f->y,
+         s = f->shape.cube.side - 2 * print_settings.nozzle_diameter;
+  size_t nbr_pass = compute_nbr_pass(s, print_settings.nozzle_diameter);
+  double width = s / nbr_pass;
+  s = (s - width) / 2;
+  double coords[4][2] = {
+      {x - s, y - s}, {x - s, y + s}, {x + s, y + s}, {x + s, y - s}};
+  int min_idx = closest_coord_idx(coords, 4);
+  add_move(out, coords[min_idx][0], coords[min_idx][1], z);
+  double k=1;
+  switch (min_idx) {
+  case 0:
+    add_line(out, nozzle_state.x, nozzle_state.y + width*(nbr_pass-1)*k, z, width);
+    for (int i = nbr_pass-1; i >0; --i) {
+      add_line(out, nozzle_state.x + width*i*k, nozzle_state.y, z, width);
+      add_line(out, nozzle_state.x, nozzle_state.y - width*i*k, z, width);
+      k*=-1;
+    }
+    break;
+  case 1:
+    add_line(out, nozzle_state.x + width*(nbr_pass-1)*k, nozzle_state.y, z, width);
+    for (int i = nbr_pass-1; i >0; --i) {
+      add_line(out, nozzle_state.x, nozzle_state.y - width*i*k, z, width);
+      add_line(out, nozzle_state.x - width*i*k, nozzle_state.y, z, width);
+      k*=-1;
+    }
+    break;
+  case 2:
+    add_line(out, nozzle_state.x, nozzle_state.y - width*(nbr_pass-1)*k, z, width);
+    for (int i = nbr_pass-1; i >0; --i) {
+      add_line(out, nozzle_state.x - width*i*k, nozzle_state.y, z, width);
+      add_line(out, nozzle_state.x, nozzle_state.y + width*i*k, z, width);
+      k*=-1;
+    }
+    break;
+  case 3:
+    add_line(out, nozzle_state.x - width*(nbr_pass-1)*k, nozzle_state.y, z, width);
+    for (int i = nbr_pass-1; i >0; --i) {
+      add_line(out, nozzle_state.x, nozzle_state.y + width*i*k, z, width);
+      add_line(out, nozzle_state.x + width*i*k, nozzle_state.y, z, width);
+      k*=-1;
+    }
+    break;
+  default:
+    break;
+  }
+}
+
 static void add_cube_infill(FILE *out, GoozForm *f) {
-  double z = f->state.cur_layer * f->state.height_layer;
+  double z = f->state.cur_layer * f->state.height_layer-GOOZ_OFFSET_Z;
   double x = f->x, y = f->y,
          s = f->shape.cube.side - 2 * print_settings.nozzle_diameter;
   size_t nbr_pass = compute_nbr_pass(s, print_settings.nozzle_diameter);
@@ -426,7 +476,7 @@ static void add_cube_infill(FILE *out, GoozForm *f) {
 }
 
 static void add_cylinder_perimeter(FILE *out, GoozForm *f) {
-  double z = f->state.cur_layer * f->state.height_layer;
+  double z = f->state.cur_layer * f->state.height_layer-GOOZ_OFFSET_Z;
   const int seg = 80;
   double step = 2 * M_PI / seg;
   double area = print_settings.nozzle_diameter * print_settings.layer_height;
@@ -493,13 +543,11 @@ void gooz_generate_gcode(FILE *out) {
         continue;
       }
       double z = cur_form->state.cur_layer * cur_form->state.height_layer;
-      if (l==1 && i==nbr_active_forms - 1) add_move(out, cur_form->x, cur_form->y, z);
-      else add_move_oozing(out, cur_form->x, cur_form->y, z);
       switch (cur_form->type) {
 	
       case FORM_CUBE:
-        add_cube_infill_spiral(out, cur_form);
         add_cube_perimeter(out, cur_form);
+        add_cube_infill_spiral_inward(out, cur_form);
         break;
 
       case FORM_CYLINDER:
@@ -509,7 +557,6 @@ void gooz_generate_gcode(FILE *out) {
       default:
         break;
       }
-      add_move(out, cur_form->x, cur_form->y, z);
     }
   }
   emit_shutdown(out);
